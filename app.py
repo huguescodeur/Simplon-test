@@ -1,10 +1,8 @@
 import platform
-from datetime import datetime
 from functools import wraps
 
 from flask_bcrypt import Bcrypt
 from flask import Flask, flash, redirect, render_template, request, url_for, session
-import pymysql
 import psycopg2
 
 
@@ -50,13 +48,10 @@ except psycopg2.Error as e:
     print(f"Erreur de connexion : {e}")
 finally:
     db.close()
-    
-
-@app.route("/")
-def connexion():
-    return render_template("index.html")
 
 
+
+# ? Accueil
 @app.route("/accueil")
 def accueil():
     return render_template("accueil.html")
@@ -65,50 +60,82 @@ def accueil():
 # ? Register user
 @app.route('/register', methods=['GET', 'POST'])
 def register():
-    # ? Connection à ma db
     db = psycopg2.connect(
         host=app.config['PG_HOST'],
         user=app.config['PG_USER'],
         password=app.config['PG_PASSWORD'],
         dbname=app.config['PG_DB']
-        )
-    
+    )
 
-    # ? Utilisons un curseur pour exécuter nos requêtes SQL
     cursor = db.cursor()
 
     if request.method == 'POST':
         username = request.form['username']
         email = request.form['email']
         password = request.form['password']
+        retype_password = request.form['retype_password']
 
-        # Vérifions si l'utilisateur existe déjà
-        select_query = "SELECT id FROM Users WHERE username = %s"
-        cursor.execute(select_query, (email,))
+        if password != retype_password:
+            flash("Les mots de passe ne correspondent pas.", 'danger')
+            return redirect(url_for('register'))
+
+        select_query = "SELECT id FROM users WHERE email = %s OR username = %s"
+        cursor.execute(select_query, (email, username))
         user_exist = cursor.fetchone()
 
         if user_exist:
-            flash(
-                "Cet utilisateur existe déjà. Veuillez choisir un autre nom d'utilisateur.", 'danger')
+            flash("L'email ou le nom d'utilisateur existe déjà.", 'danger')
         else:
-            hashed_password = bcrypt.generate_password_hash(
-                password)
+            hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
 
-            insert_query = "INSERT INTO Users (username, email, password) VALUES (%s, %s, %s)"
-            cursor.execute(insert_query, (username, email, hashed_password))
+            cursor.execute("SELECT id FROM roles WHERE name = 'Directrice'")
+            role_id = cursor.fetchone()[0]
+
+            insert_query = "INSERT INTO users (username, email, password, role_id) VALUES (%s, %s, %s, %s)"
+            cursor.execute(insert_query, (username, email, hashed_password, role_id))
             db.commit()
            
-            cursor.execute(
-                "SELECT id FROM Users WHERE username = %s", (username,))
+            cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
             user_id = cursor.fetchone()[0]
 
-           
             session['user_id'] = user_id
 
             flash('Inscription réussie! Vous êtes maintenant connecté.', 'success')
             return redirect(url_for('accueil'))
 
     return render_template('register.html')
+
+
+
+# ? Login user
+@app.route('/', methods=['GET', 'POST'])
+def login():
+    db = psycopg2.connect(
+        host=app.config['PG_HOST'],
+        user=app.config['PG_USER'],
+        password=app.config['PG_PASSWORD'],
+        dbname=app.config['PG_DB']
+    )
+
+    cursor = db.cursor()
+
+    if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
+
+        select_query = "SELECT id, email, password FROM users WHERE email = %s"
+        cursor.execute(select_query, (email,))
+        user = cursor.fetchone()
+
+        if user and bcrypt.check_password_hash(user[2], password):
+            session['user_id'] = user[0]
+            flash('Connexion réussie!', 'success')
+            return redirect(url_for('accueil'))
+        else:
+            flash("Email ou mot de passe incorrect.", 'danger')
+
+    return render_template('login.html')
+
 
 
 # ? Logout
@@ -123,7 +150,7 @@ def logout():
 
 
 if __name__ == "__main__":
-    # app.run(debug=True)
+    app.run(debug=True)
     # If the system is a windows /!\ Change  /!\ the   /!\ Port
     if platform.system() == "Windows":
         app.run(host='0.0.0.0', port=50000, debug=True)
